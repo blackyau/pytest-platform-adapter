@@ -8,9 +8,7 @@
 
 name: Publish Python 🐍 distribution 📦 to PyPI and TestPyPI
 
-on:
-  release:
-    types: [published]
+on: push
 
 permissions:
   contents: read
