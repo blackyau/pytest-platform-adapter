@@ -3,6 +3,7 @@
 [![Release
 Status](https://img.shields.io/pypi/v/pytest-platform-adapter)](https://pypi.python.org/pypi/pytest-platform-adapter)
 [![Downloads](https://img.shields.io/pypi/dm/pytest-platform-adapter)](https://pypi.python.org/pypi/pytest-platform-adapter)
+[![Build](https://github.com/blackyau/pytest-platform-adapter/actions/workflows/deploy.yml/badge.svg)](https://github.com/allure-framework/allure-python/actions/workflows/build.yaml)
 
 Pytest集成自动化平台插件
 
