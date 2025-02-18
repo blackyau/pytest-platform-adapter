@@ -1,5 +1,9 @@
 # pytest-platform-adapter
 
+[![Release
+Status](https://img.shields.io/pypi/v/pytest-platform-adapter)](https://pypi.python.org/pypi/pytest-platform-adapter)
+[![Downloads](https://img.shields.io/pypi/dm/pytest-platform-adapter)](https://pypi.python.org/pypi/pytest-platform-adapter)
+
 Pytest集成自动化平台插件
 
 ## 功能
