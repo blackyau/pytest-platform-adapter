@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "pytest_platform_adapter"
 version = "0.1.2"
 dependencies = [
-  "pytest>=7.1.2",
+  "pytest>=6.2.5",
   "allure-pytest>=2.9.45"
 ]
 requires-python = ">=3.6"
