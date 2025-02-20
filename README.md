@@ -21,10 +21,48 @@ Pytest集成自动化平台插件
 
 ## 安装
 
+### 在线安装
+
+#### 官网在线安装
+
 执行以下命令即可完成安装
 
 ```shell
 pip install pytest-platform-adapter
+```
+
+#### 国内镜像站在线安装
+
+如果安装遇到网络相关问题，也可以使用临时使用清华大学 PyPI 源安装本插件，安装命令如下：
+
+```shell
+pip install -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple pytest-platform-adapter
+```
+
+### 离线安装
+
+#### 官网下载离线安装
+
+前往 PyPI 官网中的 pytest-platform-adapter 项目文件下载界面 https://pypi.org/project/pytest-platform-adapter/#files
+
+下载最新的 Built Distribution（构建发布版本），例如：`pytest_platform_adapter-x.x.x-py3-none-any.whl` 传输到需要离线安装的环境上
+
+然后在命令行中使用以下命令安装（你需要提前安装 `pytest` 和 `allure-pytest`）
+
+```
+pip install pytest_platform_adapter-1.0.0-py3-none-any.whl
+```
+
+#### 国内镜像站下载离线安装
+
+前往清华大学 PyPI 源本插件的下载文件页 https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/pytest-platform-adapter/
+
+下载最新（版本号最大）的扩展名为 `.whl` 的构建发布版本文件，例如：`pytest_platform_adapter-x.x.x-py3-none-any.whl` 传输到需要离线安装的环境上
+
+然后在命令行中使用以下命令安装（你需要提前安装 `pytest` 和 `allure-pytest`）
+
+```
+pip install pytest_platform_adapter-1.0.0-py3-none-any.whl
 ```
 
 ## 使用方法
