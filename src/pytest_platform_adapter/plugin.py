@@ -1,12 +1,14 @@
 import asyncio
 import json
 import os
-from typing import List, Optional
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Set
 
 import requests
-from allure_pytest.utils import allure_title
+from allure_pytest.utils import allure_label, allure_title
 import logging
 import pytest
+from _pytest.stash import StashKey
 
 logger = logging.getLogger('pytest-platform-adapter')
 logger.setLevel(logging.INFO)
@@ -30,6 +32,43 @@ platform_path = None
 pipeline_name = None
 build_number = None
 platform_use_https = False
+ENV_SETTINGS_KEY: StashKey["EnvCheckSettings"] = StashKey()
+ENV_RUNTIME_KEY: StashKey["EnvCheckRuntime"] = StashKey()
+ITEM_KIND_KEY: StashKey[str] = StashKey()
+BEHAVIOR_KEY: StashKey[Optional[str]] = StashKey()
+ENV_XFAIL_REASON_KEY: StashKey[Optional[str]] = StashKey()
+STASH_SENTINEL = object()
+
+
+@dataclass
+class EnvCheckSettings:
+    mode: str = 'all'
+    behavior_scope: str = 'feature'
+    fail_action: str = 'skip'
+    global_nodeids: List[str] = field(default_factory=list)
+    behavior_nodeids: List[str] = field(default_factory=list)
+
+    def enable_global(self) -> bool:
+        return self.mode in {'global', 'all'} and bool(self.global_nodeids)
+
+    def enable_behavior(self) -> bool:
+        return self.mode in {'behavior', 'all'} and bool(self.behavior_nodeids)
+
+    def enabled(self) -> bool:
+        if self.mode == 'off':
+            return False
+        return self.enable_global() or self.enable_behavior()
+
+
+@dataclass
+class EnvCheckRuntime:
+    global_failures: Dict[str, str] = field(default_factory=dict)
+    behavior_failures: Dict[str, str] = field(default_factory=dict)
+
+    def first_global_failure(self) -> Optional[str]:
+        if not self.global_failures:
+            return None
+        return next(iter(self.global_failures.values()))
 
 
 def pytest_addoption(parser):
@@ -52,6 +91,19 @@ def pytest_addoption(parser):
         default=False,
         help='扫描模式：快速生成 Allure 报告而不实际执行测试'
     )
+    group.addoption(
+        '--env-check-mode',
+        action='store',
+        default='all',
+        choices=['off', 'global', 'behavior', 'all'],
+        help='环境检查模式：off(禁用)/global(仅全局)/behavior(仅行为)/all(全部)'
+    )
+    group.addoption(
+        '--env-check-scope',
+        action='store',
+        default=None,
+        help='特性级检查所使用的 Allure 标签层级：epic/feature/story'
+    )
     parser.addini(
         'platform_ip',
         help='自动化平台API IP',
@@ -72,6 +124,28 @@ def pytest_addoption(parser):
         help='上报自动化平台时启用HTTPS，默认不启用',
         default=False
     )
+    parser.addini(
+        'platform_env_global_checks',
+        type='linelist',
+        help='全局环境检查用例的绝对NodeID列表',
+        default=[]
+    )
+    parser.addini(
+        'platform_env_behavior_checks',
+        type='linelist',
+        help='特性级环境检查用例的绝对NodeID列表',
+        default=[]
+    )
+    parser.addini(
+        'platform_env_behavior_scope',
+        help='特性级检查的Allure层级（epic/feature/story）',
+        default='feature'
+    )
+    parser.addini(
+        'platform_env_fail_action',
+        help='环境检查失败后对业务用例的处理方式（skip/xfail/none）',
+        default='skip'
+    )
 
 
 def pytest_collection_modifyitems(config, items):
@@ -79,21 +153,26 @@ def pytest_collection_modifyitems(config, items):
     hook收集用例的过程，给--case_ids和--case_ids_file提供支持
     修改测试用例集合，根据提供的测试用例ID过滤测试用例
     """
+    settings = get_env_settings(config)
+    forced_nodeids = _collect_forced_nodeids(settings)
+    initial_nodeids = {item.nodeid for item in items}
+    for missing in sorted(forced_nodeids - initial_nodeids):
+        logger.warning(f"配置的环境检查用例 {missing} 未被收集，检查 NodeID 是否正确")
+
     target_ids = get_target_test_ids(config)
-    if not target_ids:
-        test_stats['total'] = len(items)  # 更新总用例数
-        return
     selected = []
     deselected = []
     for item in items:
+        nodeid = item.nodeid
+        should_force_run = nodeid in forced_nodeids
         title = allure_title(item)
         test_id = get_test_id_from_title(title)
-        if test_id in target_ids:
+        if not target_ids or should_force_run or test_id in target_ids:
             selected.append(item)
         else:
             deselected.append(item)
-        # 检测 ID 是否有重复，只是单纯的检查一下，不影响执行
-        if test_id in cases_ids:
+        # 检测 ID 是否有重复，只是单纯的检查一下，不影响执行。用例 id 为 1 的是环境检查脚本
+        if test_id in cases_ids and test_id != "0":
             # 为 None 在这里就不用打印log了，因为在 get_test_id_from_title 里面就会报错一次
             if test_id is None:
                 continue
@@ -102,11 +181,14 @@ def pytest_collection_modifyitems(config, items):
             cases_ids.add(test_id)
     if deselected:
         config.hook.pytest_deselected(items=deselected)
-        items[:] = selected
-    selected_ids = [get_test_id_from_title(allure_title(item)) for item in selected]
-    test_stats['total'] = len(selected)  # 更新总用例数
-    logger.info("目标测试用例ID (%d个): %s", len(target_ids), target_ids)
-    logger.info("实际执行用例ID (%d个): %s", len(selected_ids), selected_ids)
+    items[:] = selected
+    selected_ids = [get_test_id_from_title(allure_title(item)) for item in items]
+    test_stats['total'] = len(items)  # 更新总用例数
+    if target_ids:
+        logger.info("目标测试用例ID (%d个): %s", len(target_ids), target_ids)
+        logger.info("实际执行用例ID (%d个): %s", len(selected_ids), selected_ids)
+    if env_checks_enabled(settings):
+        _apply_env_check_collection_logic(config, settings, items)
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -122,6 +204,18 @@ def pytest_runtest_setup(item):
     if item.config.getoption('--scan'):
         # logger.info(f"扫描模式：跳过测试用例 {allure_title(item)}前置")
         pytest.skip("扫描模式已启动，跳过测试用例前置")
+    settings = get_env_settings(item.config)
+    if env_checks_enabled(settings):
+        runtime = get_env_runtime(item.config)
+        kind = _get_item_kind(item)
+        global_reason = runtime.first_global_failure()
+        if global_reason and kind != 'global_check':
+                _apply_env_failure_action(settings, item, global_reason)
+        elif kind == 'business':
+            behavior = _ensure_behavior_stashed(item, settings.behavior_scope)
+            behavior_reason = runtime.behavior_failures.get(behavior) if behavior else None
+            if behavior_reason:
+                _apply_env_failure_action(settings, item, behavior_reason)
     yield
 
 
@@ -131,6 +225,39 @@ def pytest_runtest_teardown(item):
         # logger.info(f"扫描模式：跳过测试用例 {allure_title(item)}后置")
         pytest.skip("扫描模式已启动，跳过测试用例后置")
     yield
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    report = outcome.get_result()
+    settings = get_env_settings(item.config)
+    if not env_checks_enabled(settings):
+        return
+    if report.when != 'call':
+        return
+    kind = _get_item_kind(item)
+    if kind not in {'global_check', 'behavior_check'}:
+        return
+    runtime = get_env_runtime(item.config)
+    if report.failed:
+        reason = _format_env_failure_message(kind, item, report)
+        if kind == 'global_check':
+            runtime.global_failures[item.nodeid] = reason
+        else:
+            behavior = _ensure_behavior_stashed(item, settings.behavior_scope)
+            if behavior:
+                runtime.behavior_failures[behavior] = reason
+            else:
+                logger.warning("特性级环境检查 %s 缺少 %s 标签，无法绑定到具体行为", item.nodeid,
+                               settings.behavior_scope)
+    else:
+        if kind == 'global_check':
+            runtime.global_failures.pop(item.nodeid, None)
+        else:
+            behavior = _ensure_behavior_stashed(item, settings.behavior_scope)
+            if behavior:
+                runtime.behavior_failures.pop(behavior, None)
 
 
 @pytest.hookimpl
@@ -209,6 +336,9 @@ def pytest_configure(config):
     scan_enable, platform_ip, platform_port, platform_path, platform_use_https = config.getoption(
         '--scan'), config.getini('platform_ip'), config.getini('platform_port'), config.getini(
         'platform_path'), config.getini('platform_use_https')
+    settings = build_env_check_settings(config)
+    config.stash[ENV_SETTINGS_KEY] = settings
+    config.stash[ENV_RUNTIME_KEY] = EnvCheckRuntime()
     pipeline_name = os.environ.get("JOB_NAME")
     build_number = os.environ.get("BUILD_NUMBER")
     handler = logging.StreamHandler()
@@ -219,6 +349,10 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         "allure_title: 使用allure标题标记测试用例"
+    )
+    config.addinivalue_line(
+        "markers",
+        "environment_check: 标记环境检查用例"
     )
 
 
@@ -263,3 +397,175 @@ def get_test_id_from_title(title: Optional[str]) -> Optional[str]:
     else:
         logger.error(f'存在无法解析用例ID的用例，用例标题为：{title}')
         return None
+
+
+def build_env_check_settings(config) -> EnvCheckSettings:
+    mode = config.getoption('--env-check-mode') or 'all'
+    scope_opt = config.getoption('--env-check-scope')
+    scope_ini = config.getini('platform_env_behavior_scope') or 'feature'
+    scope = (scope_opt or scope_ini or 'feature').strip().lower()
+    if scope not in {'epic', 'feature', 'story'}:
+        logger.warning("未识别的行为层级 %s，回退到 feature", scope)
+        scope = 'feature'
+    fail_action_raw = config.getini('platform_env_fail_action')
+    fail_action = (fail_action_raw or 'skip').strip().lower()
+    if fail_action not in {'skip', 'xfail', 'none'}:
+        logger.warning("platform_env_fail_action=%s 不受支持，改用 skip", fail_action_raw)
+        fail_action = 'skip'
+    global_nodes = _normalize_nodeids(config.getini('platform_env_global_checks'))
+    behavior_nodes = _normalize_nodeids(config.getini('platform_env_behavior_checks'))
+    if mode not in {'off', 'global', 'behavior', 'all'}:
+        logger.warning("未识别的 env-check-mode %s，回退到 all", mode)
+        mode = 'all'
+    return EnvCheckSettings(
+        mode=mode,
+        behavior_scope=scope,
+        fail_action=fail_action,
+        global_nodeids=global_nodes,
+        behavior_nodeids=behavior_nodes,
+    )
+
+
+def env_checks_enabled(settings: Optional[EnvCheckSettings]) -> bool:
+    return bool(settings and settings.enabled())
+
+
+def _normalize_nodeids(values: Optional[List[str]]) -> List[str]:
+    if not values:
+        return []
+    normalized = []
+    for nodeid in values:
+        if not nodeid:
+            continue
+        value = nodeid.strip()
+        if value:
+            normalized.append(value)
+    return normalized
+
+
+def get_env_settings(config) -> EnvCheckSettings:
+    return config.stash.get(ENV_SETTINGS_KEY, EnvCheckSettings())
+
+
+def get_env_runtime(config) -> EnvCheckRuntime:
+    return config.stash.get(ENV_RUNTIME_KEY, EnvCheckRuntime())
+
+
+def _collect_forced_nodeids(settings: Optional[EnvCheckSettings]) -> Set[str]:
+    if not env_checks_enabled(settings):
+        return set()
+    forced = set()
+    if settings.enable_global():
+        forced.update(settings.global_nodeids)
+    if settings.enable_behavior():
+        forced.update(settings.behavior_nodeids)
+    return forced
+
+
+def _apply_env_check_collection_logic(config, settings: EnvCheckSettings, items: List[pytest.Item]) -> None:
+    node_map = {item.nodeid: item for item in items}
+    ordered: List[pytest.Item] = []
+    consumed: Set[str] = set()
+    missing_behaviors: List[str] = []
+
+    for nodeid in settings.global_nodeids:
+        item = node_map.get(nodeid)
+        if not item:
+            continue
+        ordered.append(item)
+        consumed.add(nodeid)
+        item.stash[ITEM_KIND_KEY] = 'global_check'
+        item.stash[BEHAVIOR_KEY] = None
+
+    behavior_checks: Dict[str, pytest.Item] = {}
+    for nodeid in settings.behavior_nodeids:
+        item = node_map.get(nodeid)
+        if not item:
+            continue
+        behavior = _ensure_behavior_stashed(item, settings.behavior_scope)
+        if not behavior:
+            missing_behaviors.append(nodeid)
+            continue
+        if behavior in behavior_checks:
+            logger.warning(
+                "特性级检查 %s 重复定义，沿用首次声明的用例 %s",
+                behavior,
+                behavior_checks[behavior].nodeid,
+            )
+            continue
+        behavior_checks[behavior] = item
+        consumed.add(nodeid)
+        item.stash[ITEM_KIND_KEY] = 'behavior_check'
+
+    if missing_behaviors:
+        logger.warning(
+            "下列特性级检查缺少 %s 标签：%s",
+            settings.behavior_scope,
+            missing_behaviors,
+        )
+
+    behavior_inserted: Set[str] = set()
+    for item in items:
+        if item.nodeid in consumed:
+            continue
+        if item.stash.get(ITEM_KIND_KEY, STASH_SENTINEL) is STASH_SENTINEL:
+            item.stash[ITEM_KIND_KEY] = 'business'
+        behavior = _ensure_behavior_stashed(item, settings.behavior_scope)
+        if behavior and behavior in behavior_checks and behavior not in behavior_inserted:
+            ordered.append(behavior_checks[behavior])
+            behavior_inserted.add(behavior)
+        ordered.append(item)
+
+    for behavior, check_item in behavior_checks.items():
+        if behavior not in behavior_inserted:
+            ordered.append(check_item)
+            behavior_inserted.add(behavior)
+
+    if ordered:
+        items[:] = ordered
+    logger.debug(
+        "最终的环境检查执行顺序: %s",
+        [item.nodeid for item in items],
+    )
+
+
+def _ensure_behavior_stashed(item: pytest.Item, scope: str) -> Optional[str]:
+    behavior = item.stash.get(BEHAVIOR_KEY, STASH_SENTINEL)
+    if behavior is not STASH_SENTINEL:
+        return behavior
+    labels = allure_label(item, scope) or []
+    value = labels[0] if labels else None
+    item.stash[BEHAVIOR_KEY] = value
+    return value
+
+
+def _get_item_kind(item: pytest.Item) -> Optional[str]:
+    return item.stash.get(ITEM_KIND_KEY, None)
+
+
+def _apply_env_failure_action(settings: EnvCheckSettings, item: pytest.Item, reason: str) -> None:
+    if settings.fail_action == 'none':
+        return
+    if settings.fail_action == 'xfail':
+        _mark_item_expected_failure(item, reason)
+        return
+    pytest.skip(reason)
+
+
+def _mark_item_expected_failure(item: pytest.Item, reason: str) -> None:
+    existing = item.stash.get(ENV_XFAIL_REASON_KEY, None)
+    if existing:
+        return
+    item.add_marker(pytest.mark.xfail(reason=reason, run=True, strict=False))
+    item.stash[ENV_XFAIL_REASON_KEY] = reason
+
+
+def _format_env_failure_message(kind: str, item: pytest.Item, report: pytest.TestReport) -> str:
+    prefix = "全局" if kind == 'global_check' else "特性级"
+    detail = ""
+    longrepr = getattr(report, "longreprtext", "")
+    if longrepr:
+        first_line = longrepr.strip().splitlines()[0]
+        if first_line:
+            detail = f": {first_line}"
+    return f"{prefix}环境检查失败（{item.nodeid}）{detail}"

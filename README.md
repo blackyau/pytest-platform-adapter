@@ -12,6 +12,7 @@ Pytest集成自动化平台插件
 - 根据用例 `allure.title` 中的 ID 筛选执行的用例
 - 跳过所有用例的执行，快速生成 Allure 报告
 - 周期性的通过 RESTApi 上报执行用例的整体进度
+- 在执行前插入全局 / 特性级环境检查用例，失败时可批量 skip/xfail 后续业务用例
 
 ## 环境依赖
 
@@ -50,7 +51,7 @@ pip install -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple pytest-platf
 然后在命令行中使用以下命令安装（你需要提前安装 `pytest` 和 `allure-pytest`）
 
 ```
-pip install pytest_platform_adapter-1.0.0-py3-none-any.whl
+pip install pytest_platform_adapter-1.1.0-py3-none-any.whl
 ```
 
 #### 国内镜像站下载离线安装
@@ -62,7 +63,7 @@ pip install pytest_platform_adapter-1.0.0-py3-none-any.whl
 然后在命令行中使用以下命令安装（你需要提前安装 `pytest` 和 `allure-pytest`）
 
 ```
-pip install pytest_platform_adapter-1.0.0-py3-none-any.whl
+pip install pytest_platform_adapter-1.1.0-py3-none-any.whl
 ```
 
 ## 使用方法
@@ -139,6 +140,37 @@ platform_use_https = False
 ```
 
 其中 `JOB_NAME` 和 `BUILD_NUMBER` 是通过环境变量获取的。
+
+### 环境检查
+
+环境检查由额外的 pytest 用例构成，通过配置它们的 NodeID 可以在收集阶段将这些用例插入到业务用例之前执行。可同时启用“全局检查”和“特性级检查”。
+
+#### 配置项-推荐
+
+在 `pytest.ini` 中添加以下内容：
+
+```ini
+[pytest]
+platform_env_global_checks =
+    tests/env_check/test_global_env_check.py::TestGlobalEnvCheck
+platform_env_behavior_checks =
+    tests/env_check/test_function_env_check.py::TestFunctionEnvCheck
+platform_env_behavior_scope = epic     # epic / feature / story
+platform_env_fail_action = skip        # skip / xfail / none
+```
+
+- `platform_env_global_checks`：在每次用例执行前跑一遍的检查用例列表。
+- `platform_env_behavior_checks`：特性级检查用例列表，插件会读取这些用例标签并在同一特性的首个用例前插入执行。
+- `platform_env_behavior_scope`：定义特性的级别可选的有 epic/feature/story（分别对应 Allure Report 的 behaviors 中的一级目录、二级目录、三级目录）
+- `platform_env_fail_action`：检查失败后对后续业务用例的处理方式，`skip` 为直接跳过、`xfail` 为继续执行并动态加上 `xfail`（失败记为 XFAIL、通过记为 XPASS）、`none` 仅记录日志不干预执行。
+
+#### 命令行
+
+- `--env-check-mode={off,global,behavior,all}`：快速控制启用的检查范围。
+- `--env-check-scope=<epic|feature|story>`：临时覆盖行为层级设定。
+- 当 `platform_env_fail_action=xfail` 时，会在受影响的业务用例上自动添加 `pytest.mark.xfail(run=True, strict=False)`，用例依旧执行，只是失败时记为 XFAIL。
+
+当检查用例失败时，插件会在 `pytest_runtest_setup` 阶段统一对后续业务用例执行 `skip` 或 `xfail`，并在日志中说明对应的检查节点。检查用例自身依旧遵循 pytest 原生语义，可继续使用 `skip/xfail/flaky` 等标记。
 
 
 ## 调试方法
