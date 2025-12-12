@@ -157,17 +157,22 @@ platform_env_behavior_checks =
     tests/env_check/test_function_env_check.py::TestFunctionEnvCheck
 platform_env_behavior_scope = epic     # epic / feature / story
 platform_env_fail_action = skip        # skip / xfail / none
+platform_env_collect_mode = force      # force / auto
 ```
 
 - `platform_env_global_checks`：在每次用例执行前跑一遍的检查用例列表。
 - `platform_env_behavior_checks`：特性级检查用例列表，插件会读取这些用例标签并在同一特性的首个用例前插入执行。
 - `platform_env_behavior_scope`：定义特性的级别可选的有 epic/feature/story（分别对应 Allure Report 的 behaviors 中的一级目录、二级目录、三级目录）
 - `platform_env_fail_action`：检查失败后对后续业务用例的处理方式，`skip` 为直接跳过、`xfail` 为继续执行并动态加上 `xfail`（失败记为 XFAIL、通过记为 XPASS）、`none` 仅记录日志不干预执行。
+- `platform_env_collect_mode`：环境检查收集模式，默认 `force`。
+  - `force`（强制）：即使本次命令行只收集了业务目录，也会强制把 `platform_env_global_checks` / `platform_env_behavior_checks` 声明的 NodeID 注入收集范围；环境检查用例不受 `-m`/`-k` 等筛选影响永远执行；全局检查永远执行；特性级检查仅在本次业务用例中存在同一行为标签（scope 对应 epic/feature/story）的情况下才执行，没有匹配的特性级检查不会执行。
+  - `auto`（自动）：不额外注入收集参数，仅执行本次 pytest 收集到的检查用例；如果声明的 NodeID 没有被收集到则不会执行。
 
 #### 命令行
 
 - `--env-check-mode={off,global,behavior,all}`：快速控制启用的检查范围。
 - `--env-check-scope=<epic|feature|story>`：临时覆盖行为层级设定。
+- `--env-check-collect-mode={force,auto}`：临时覆盖 `platform_env_collect_mode`，控制环境检查的收集/执行策略。
 - 当 `platform_env_fail_action=xfail` 时，会在受影响的业务用例上自动添加 `pytest.mark.xfail(run=True, strict=False)`，用例依旧执行，只是失败时记为 XFAIL。
 
 当检查用例失败时，插件会在 `pytest_runtest_setup` 阶段统一对后续业务用例执行 `skip` 或 `xfail`，并在日志中说明对应的检查节点。检查用例自身依旧遵循 pytest 原生语义，可继续使用 `skip/xfail/flaky` 等标记。
