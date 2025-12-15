@@ -51,7 +51,8 @@ pip install -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple pytest-platf
 然后在命令行中使用以下命令安装（你需要提前安装 `pytest` 和 `allure-pytest`）
 
 ```
-pip install pytest_platform_adapter-1.1.0-py3-none-any.whl
+# 需要把下面的 x.x.x 替换为实际的版本号
+pip install pytest_platform_adapter-x.x.x-py3-none-any.whl
 ```
 
 #### 国内镜像站下载离线安装
@@ -63,7 +64,8 @@ pip install pytest_platform_adapter-1.1.0-py3-none-any.whl
 然后在命令行中使用以下命令安装（你需要提前安装 `pytest` 和 `allure-pytest`）
 
 ```
-pip install pytest_platform_adapter-1.1.0-py3-none-any.whl
+# 需要把下面的 x.x.x 替换为实际的版本号
+pip install pytest_platform_adapter-x.x.x-py3-none-any.whl
 ```
 
 ## 使用方法
