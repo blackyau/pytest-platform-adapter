@@ -380,6 +380,9 @@ def pytest_configure(config):
         '--scan'), config.getini('platform_ip'), config.getini('platform_port'), config.getini(
         'platform_path'), config.getini('platform_use_https')
     settings = build_env_check_settings(config)
+    if config.getoption('--scan'):
+        # 扫描模式下禁用环境检查，避免强制收集影响正常用例收集。
+        settings.mode = 'off'
     config.stash[ENV_SETTINGS_KEY] = settings
     config.stash[ENV_RUNTIME_KEY] = EnvCheckRuntime()
     # 在强制模式下，将声明的环境检查 NodeID 注入到 pytest 收集参数中，
