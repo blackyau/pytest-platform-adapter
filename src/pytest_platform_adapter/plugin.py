@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set
 
@@ -389,13 +390,11 @@ def pytest_configure(config):
     # 以保证即使用户只选择了业务目录也能收集到检查用例。
     if env_checks_enabled(settings) and settings.collect_mode == 'force':
         try:
-            from pathlib import Path
-
-            existing_args = set(config.args or [])
+            existing_args = list(config.args or [])
             rootpath = getattr(config, "rootpath", Path.cwd())
             forced_args: List[str] = []
             for nodeid in _collect_forced_nodeids(settings):
-                if nodeid in existing_args:
+                if _existing_args_cover_nodeid(existing_args, nodeid, rootpath):
                     continue
                 # 仅对文件路径存在的 NodeID 进行注入，避免明显的 not found。
                 path_part = nodeid.split("::", 1)[0]
@@ -404,6 +403,7 @@ def pytest_configure(config):
                     p = rootpath / p
                 if p.exists():
                     forced_args.append(nodeid)
+                    existing_args.append(nodeid)
                 else:
                     logger.warning("强制收集环境检查失败：文件不存在 %s", nodeid)
             if forced_args:
@@ -524,6 +524,30 @@ def _normalize_nodeids(values: Optional[List[str]]) -> List[str]:
         if value:
             normalized.append(value)
     return normalized
+
+
+def _existing_args_cover_nodeid(existing_args: List[str], nodeid: str, rootpath: Path) -> bool:
+    """判断现有收集参数是否已覆盖目标 NodeID，避免重复注入破坏收集根。"""
+    target_path = nodeid.split("::", 1)[0]
+    target = Path(target_path)
+    if not target.is_absolute():
+        target = rootpath / target
+
+    for arg in existing_args:
+        arg_value = str(arg)
+        if arg_value == nodeid or nodeid.startswith(arg_value + "::"):
+            return True
+
+        arg_path = arg_value.split("::", 1)[0]
+        candidate = Path(arg_path)
+        if not candidate.is_absolute():
+            candidate = rootpath / candidate
+
+        if candidate == target:
+            return True
+        if candidate.is_dir() and target.is_relative_to(candidate):
+            return True
+    return False
 
 
 def get_env_settings(config) -> EnvCheckSettings:
