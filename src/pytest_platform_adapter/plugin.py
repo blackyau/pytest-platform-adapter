@@ -227,7 +227,6 @@ def pytest_collection_modifyitems(config, items):
                 current_ids.add(forced_item.nodeid)
 
     selected_ids = [get_test_id_from_title(allure_title(item)) for item in items]
-    test_stats['total'] = len(items)  # 更新总用例数
     if target_ids:
         logger.info("目标测试用例ID (%d个): %s", len(target_ids), target_ids)
         logger.info("实际执行用例ID (%d个): %s", len(selected_ids), selected_ids)
@@ -426,6 +425,11 @@ def pytest_configure(config):
         "markers",
         "environment_check: 标记环境检查用例"
     )
+
+
+def pytest_collection_finish(session):
+    """在所有收集和过滤（包括 -m/-k deselect）完成后，设置 total 为 selected 的用例数。"""
+    test_stats['total'] = len(session.items)
 
 
 def get_test_ids_from_file(file_path: str) -> List[str]:
